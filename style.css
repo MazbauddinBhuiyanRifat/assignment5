@@ -1,9 +1,6 @@
 *, body { font-family: 'Sora', sans-serif; }
     .mono { font-family: 'JetBrains Mono', monospace; }
-
     body { background: #f3f4f6; min-height: 100vh; }
-
-  
     .login-bg {
       background: linear-gradient(135deg, #1a1a2e 0%, #16213e 55%, #0f3460 100%);
       min-height: 100vh;
@@ -13,7 +10,7 @@
       background: #fff;
       border-radius: 18px;
       padding: 44px 40px;
-      width: 100%; max-width:
+      width: 100%; max-width:420px;
       box-shadow: 0 24px 64px rgba(0,0,0,0.35);
     }
 
@@ -44,7 +41,6 @@
       transition: all 0.18s; color: #111827; font-family: 'Sora', sans-serif;
     }
     .search-input:focus { border-color: #7c3aed; background: #fff; width: 260px; box-shadow: 0 0 0 3px rgba(124,58,237,0.1); }
-
     .issues-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
@@ -72,7 +68,6 @@
       opacity:0; transition: opacity 0.17s;
     }
     .issue-card:hover::after { opacity:1; }
-
     .badge-high   { background:#fee2e2; color:#dc2626; border:1px solid #fca5a5; }
     .badge-medium { background:#fef9c3; color:#b45309; border:1px solid #fde68a; }
     .badge-low    { background:#dcfce7; color:#16a34a; border:1px solid #86efac; }
@@ -99,7 +94,6 @@
       from { opacity:0; transform: scale(0.9); }
       to   { opacity:1; transform: scale(1); }
     }
-
     .fi {
       width:100%; padding:8px 12px; border:1.5px solid #e5e7eb; border-radius:8px;
       font-size:0.85rem; outline:none; transition:border-color 0.15s; font-family:'Sora',sans-serif;
@@ -108,12 +102,8 @@
 
     
     .btn-purple { background:#7c3aed; color:#fff; border:none; border-radius:8px; font-weight:600; font-size:0.85rem; padding:8px 18px; cursor:pointer; transition:background 0.15s; display:flex;align-items:center;gap:6px; }
-    .btn-purple:hover { background:#6d28d9; }
-    .btn-ghost-sm { background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:#fff; border-radius:6px; padding:5px 12px; font-size:0.8rem; cursor:pointer; transition:background 0.15s; }
+    .btn-purple:hover { background:#6d28d9; }.btn-ghost-sm { background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:#fff; border-radius:6px; padding:5px 12px; font-size:0.8rem; cursor:pointer; transition:background 0.15s; }
     .btn-ghost-sm:hover { background:rgba(255,255,255,0.2); }
-
-    .status-dot { display:inline-block; width:9px; height:9px; border-radius:50%; }
-    .dot-open   { background:#22c55e; }
+    .status-dot { display:inline-block; width:9px; height:9px; border-radius:50%; } .dot-open   { background:#22c55e; }
     .dot-closed { background:#8b5cf6; }
-
     .empty-box { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:64px 20px; color:#9ca3af; gap:12px; grid-column:1/-1; }
