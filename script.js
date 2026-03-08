@@ -1,184 +1,154 @@
- const API = 'https://phi-lab-server.vercel.app/api/v1/lab';
-  let ALL = [];
-  let currentTab = 'all';
-  let searchTimer = null;
-  let isSearchMode = false;
+const API = 'https://phi-lab-server.vercel.app/api/v1/lab';
+let ALL = [], currentTab = 'all', searchTimer = null, isSearchMode = false;
 
-  // ─── NORMALISE API RESPONSE ──────────────────────────────
-  // Unwrap whatever envelope the API returns
-  function unwrap(json) {
-    if (Array.isArray(json)) return json;
-    for (const k of ['issues','data','result','results','items','issue']) {
-      if (Array.isArray(json[k])) return json[k];
-    }
-    return [];
+// ── Helpers ──────────────────────────────────────────────
+const unwrap = json => {
+  if (Array.isArray(json)) return json;
+  for (const k of ['issues','data','result','results','items','issue'])
+    if (Array.isArray(json[k])) return json[k];
+  return [];
+};
+
+const getStatus = i => {
+  const s = String(i.status || i.state || '').toLowerCase();
+  if (s === 'open' || s === 'closed') return s;
+  if ('isOpen'   in i) return i.isOpen   ? 'open' : 'closed';
+  if ('open'     in i) return i.open     ? 'open' : 'closed';
+  if ('isClosed' in i) return i.isClosed ? 'closed' : 'open';
+  if ('closed'   in i) return i.closed   ? 'closed' : 'open';
+  return 'open';
+};
+
+const getPriority = i => String(i.priority || i.severity || '').toUpperCase() || null;
+
+const getLabels = i => {
+  const r = i.labels || i.tags || [];
+  return Array.isArray(r) ? r.map(l => typeof l === 'string' ? l : (l.name || l.label || '')).filter(Boolean) : [];
+};
+
+const getAuthor   = i => i.author || i.createdBy || i.user?.login || i.username || 'unknown';
+const getAssignee = i => i.assignee || i.assignedTo || i.assigned_to || 'Unassigned';
+const getId       = i => i._id || i.id || '';
+const getNum      = (i, n) => i.number || i.issueNumber || i.num || (n + 1);
+
+const getDate = i => {
+  const d = i.createdAt || i.created_at || i.date || '';
+  if (!d) return '';
+  try { return new Date(d).toLocaleDateString('en-US', { month:'numeric', day:'numeric', year:'numeric' }); }
+  catch { return d; }
+};
+
+// ── DOM shortcuts ─────────────────────────────────────────
+const el  = id => document.getElementById(id);
+const show = id => el(id).classList.remove('hidden');
+const hide = id => el(id).classList.add('hidden');
+
+// ── Auth ──────────────────────────────────────────────────
+function doLogin() {
+  const u = el('inp_user').value.trim();
+  const p = el('inp_pass').value.trim();
+  if (u === 'admin' && p === 'admin123') {
+    hide('loginPage'); show('appPage'); hide('loginErr');
+    fetchAll();
+  } else {
+    el('loginErr').textContent = 'Invalid credentials. Use admin / admin123.';
+    show('loginErr');
   }
+}
 
-  // ─── STATUS DETECTION ────────────────────────────────────
-  // Works for: status:"open"/"closed", isOpen:bool, open:bool, isClosed:bool, state:"open"/"closed"
-  function getStatus(issue) {
-    // string fields
-    const s = String(issue.status || issue.state || '').toLowerCase();
-    if (s === 'open')   return 'open';
-    if (s === 'closed') return 'closed';
-    // boolean fields
-    if (typeof issue.isOpen   === 'boolean') return issue.isOpen   ? 'open' : 'closed';
-    if (typeof issue.open     === 'boolean') return issue.open     ? 'open' : 'closed';
-    if (typeof issue.isClosed === 'boolean') return issue.isClosed ? 'closed' : 'open';
-    if (typeof issue.closed   === 'boolean') return issue.closed   ? 'closed' : 'open';
-    return 'open'; // fallback
+function doLogout() {
+  hide('appPage'); show('loginPage');
+  ALL = []; currentTab = 'all'; isSearchMode = false;
+  el('searchInput').value = '';
+  setTabActive('all');
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !el('loginPage').classList.contains('hidden')) doLogin();
+});
+
+// ── Fetch ─────────────────────────────────────────────────
+async function fetchAll() {
+  showLoading();
+  try {
+    const json = await fetch(`${API}/issues`).then(r => r.json());
+    ALL = unwrap(json);
+    console.log('[API] Total:', ALL.length, '| Sample:', ALL[0]);
+    render();
+  } catch (e) {
+    console.error(e);
+    showError('Could not reach the API. Check your internet connection.');
   }
+}
 
-  function getPriority(issue) {
-    return String(issue.priority || issue.severity || '').toUpperCase() || null;
+async function fetchDetail(id) {
+  if (!id || id.startsWith('local_')) return;
+  try {
+    const json  = await fetch(`${API}/issue/${id}`).then(r => r.json());
+    const issue = json.issue || json.data || json.result || json;
+    openDetail(Array.isArray(issue) ? issue[0] : issue);
+  } catch {
+    alert('Could not load issue details.');
   }
+}
 
-  function getLabels(issue) {
-    const r = issue.labels || issue.tags || [];
-    return Array.isArray(r)
-      ? r.map(l => typeof l === 'string' ? l : (l.name || l.label || '')).filter(Boolean)
-      : [];
+async function doSearch(q) {
+  if (!q.trim()) { isSearchMode = false; render(); return; }
+  isSearchMode = true;
+  showLoading();
+  try {
+    const json    = await fetch(`${API}/issues/search?q=${encodeURIComponent(q)}`).then(r => r.json());
+    const results = unwrap(json);
+    renderCards(results);
+    setCount(results.length);
+  } catch {
+    showError('Search failed.');
   }
+}
 
-  function getAuthor(issue) {
-    return issue.author || issue.createdBy || (issue.user && issue.user.login) || issue.username || 'unknown';
-  }
+// ── Render ────────────────────────────────────────────────
+function render() {
+  const list = currentTab === 'all' ? ALL
+             : ALL.filter(i => getStatus(i) === currentTab);
+  renderCards(list);
+  setCount(list.length);
+}
 
-  function getAssignee(issue) {
-    return issue.assignee || issue.assignedTo || issue.assigned_to || 'Unassigned';
-  }
+const setCount = n => el('issueCount').textContent = `${n} Issue${n !== 1 ? 's' : ''}`;
 
-  function getDate(issue) {
-    const d = issue.createdAt || issue.created_at || issue.date || '';
-    if (!d) return '';
-    try { return new Date(d).toLocaleDateString('en-US', { month:'numeric', day:'numeric', year:'numeric' }); }
-    catch { return d; }
-  }
-
-  function getId(issue) { return issue._id || issue.id || ''; }
-  function getNum(issue, i) { return issue.number || issue.issueNumber || issue.num || (i + 1); }
-
-  // ─── AUTH ────────────────────────────────────────────────
-  function doLogin() {
-    const u = document.getElementById('inp_user').value.trim();
-    const p = document.getElementById('inp_pass').value.trim();
-    const err = document.getElementById('loginErr');
-    if (u === 'admin' && p === 'admin123') {
-      err.classList.add('hidden');
-      document.getElementById('loginPage').classList.add('hidden');
-      document.getElementById('appPage').classList.remove('hidden');
-      fetchAll();
-    } else {
-      err.textContent = 'Invalid credentials. Use admin / admin123.';
-      err.classList.remove('hidden');
-    }
-  }
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !document.getElementById('loginPage').classList.contains('hidden')) doLogin();
-  });
-
-  function doLogout() {
-    document.getElementById('appPage').classList.add('hidden');
-    document.getElementById('loginPage').classList.remove('hidden');
-    ALL = []; currentTab = 'all'; isSearchMode = false;
-    document.getElementById('searchInput').value = '';
-    setTabActive('all');
-  }
-
-  // ─── FETCH ───────────────────────────────────────────────
-  async function fetchAll() {
-    showLoading();
-    try {
-      const res = await fetch(`${API}/issues`);
-      const json = await res.json();
-      ALL = unwrap(json);
-      console.log('[API] Total issues:', ALL.length, '| Sample:', ALL[0]);
-      render();
-    } catch (e) {
-      console.error(e);
-      showError('Could not reach the API. Check your internet connection.');
-    }
-  }
-
-  async function fetchDetail(id) {
-    if (!id || id.startsWith('local_')) return;
-    try {
-      const res = await fetch(`${API}/issue/${id}`);
-      const json = await res.json();
-      // unwrap single issue envelope
-      const issue = json.issue || json.data || json.result || json;
-      openDetail(Array.isArray(issue) ? issue[0] : issue);
-    } catch (e) {
-      alert('Could not load issue details.');
-    }
-  }
-
-  async function doSearch(q) {
-    if (!q.trim()) { isSearchMode = false; render(); return; }
-    isSearchMode = true;
-    showLoading();
-    try {
-      const res = await fetch(`${API}/issues/search?q=${encodeURIComponent(q)}`);
-      const json = await res.json();
-      const results = unwrap(json);
-      renderCards(results);
-      setCount(results.length);
-    } catch (e) {
-      showError('Search failed.');
-    }
-  }
-
-  // ─── RENDER ──────────────────────────────────────────────
-  function render() {
-    let list = ALL;
-    if (currentTab === 'open')   list = ALL.filter(i => getStatus(i) === 'open');
-    if (currentTab === 'closed') list = ALL.filter(i => getStatus(i) === 'closed');
-    renderCards(list);
-    setCount(list.length);
-  }
-
-  function setCount(n) {
-    document.getElementById('issueCount').textContent = `${n} Issue${n !== 1 ? 's' : ''}`;
-  }
-
-  function renderCards(list) {
-    const grid = document.getElementById('grid');
-    if (!list.length) {
-      grid.innerHTML = `<div class="empty-box">
-        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="none" stroke="#d1d5db" stroke-width="1.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+function renderCards(list) {
+  if (!list.length) {
+    el('grid').innerHTML = `
+      <div class="empty-box">
+        <i class="fa-regular fa-face-frown" style="font-size:48px; color:#d1d5db;"></i>
         <p class="font-semibold text-gray-400">No issues found</p>
         <p class="text-sm text-gray-300">Try a different filter or create a new issue</p>
       </div>`;
-      return;
-    }
-    grid.innerHTML = list.map((issue, i) => card(issue, i)).join('');
+    return;
   }
+  el('grid').innerHTML = list.map((issue, i) => card(issue, i)).join('');
+}
 
-  function card(issue, idx) {
-    const status = getStatus(issue);
-    const open   = status === 'open';
-    const pri    = getPriority(issue);
-    const lbls   = getLabels(issue);
-    const id     = getId(issue);
-    const num    = getNum(issue, idx);
-    const dt     = getDate(issue);
-    const au     = getAuthor(issue);
-    const title  = issue.title || 'Untitled Issue';
-    const body   = issue.body || issue.description || 'No description provided.';
+function card(issue, idx) {
+  const open  = getStatus(issue) === 'open';
+  const pri   = getPriority(issue);
+  const lbls  = getLabels(issue);
+  const title = issue.title || 'Untitled Issue';
+  const body  = issue.body  || issue.description || 'No description provided.';
 
-    const priClass = pri === 'HIGH' ? 'badge-high' : pri === 'MEDIUM' ? 'badge-medium' : pri === 'LOW' ? 'badge-low' : 'badge-none';
+  const priClass  = { HIGH:'badge-high', MEDIUM:'badge-medium', LOW:'badge-low' }[pri] ?? 'badge-none';
+  const statusIcon = open
+    ? `<i class="fa-solid fa-circle-info" style="color:#22c55e; font-size:14px;"></i>`
+    : `<i class="fa-solid fa-circle-check" style="color:#8b5cf6; font-size:14px;"></i>`;
 
-    const statusIcon = open
-      ? `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" stroke="#22c55e" stroke-width="2.5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`
-      : `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" stroke="#8b5cf6" stroke-width="2.5" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
+  const lblHtml = lbls.slice(0, 3).map(l => {
+    const lc  = l.toLowerCase();
+    const cls = lc.includes('bug') ? 'lbl-bug' : lc.includes('enhanc') ? 'lbl-enhancement' : lc.includes('help') ? 'lbl-help' : 'lbl-default';
+    return `<span class="lbl ${cls}">${l}</span>`;
+  }).join('');
 
-    const lblHtml = lbls.slice(0, 3).map(l => {
-      const lc  = l.toLowerCase();
-      const cls = lc.includes('bug') ? 'lbl-bug' : lc.includes('enhanc') ? 'lbl-enhancement' : lc.includes('help') ? 'lbl-help' : 'lbl-default';
-      return `<span class="lbl ${cls}">${l}</span>`;
-    }).join('');
-
-    return `<div class="issue-card" style="animation-delay:${idx * 0.03}s" onclick="fetchDetail('${id}')">
+  return `
+    <div class="issue-card" style="animation-delay:${idx * 0.03}s" onclick="fetchDetail('${getId(issue)}')">
       <div class="flex items-center justify-between mb-2">
         <div class="flex items-center gap-1.5">
           ${statusIcon}
@@ -190,112 +160,102 @@
       <p class="text-xs text-gray-500 mb-3 line-clamp-2">${body}</p>
       <div class="flex flex-wrap gap-1 mb-3">${lblHtml}</div>
       <div class="border-t border-gray-100 pt-2 text-xs text-gray-400">
-        <span class="mono font-semibold">#${num}</span> by <span class="font-semibold text-gray-600">${au}</span>
-        ${dt ? `<br>${dt}` : ''}
+        <span class="mono font-semibold">#${getNum(issue, idx)}</span>
+        by <span class="font-semibold text-gray-600">${getAuthor(issue)}</span>
+        ${getDate(issue) ? `<br>${getDate(issue)}` : ''}
       </div>
     </div>`;
+}
+
+const showLoading = () => el('grid').innerHTML = `
+  <div style="grid-column:1/-1; display:flex; justify-content:center; padding:60px">
+    <span class="loading loading-spinner loading-lg" style="color:#7c3aed"></span>
+  </div>`;
+
+const showError = msg => el('grid').innerHTML = `
+  <div class="empty-box"><p class="text-red-400 font-semibold text-sm">${msg}</p></div>`;
+
+// ── Tabs ──────────────────────────────────────────────────
+function switchTab(tab) {
+  currentTab = tab;
+  setTabActive(tab);
+  if (!isSearchMode) render();
+}
+
+const setTabActive = tab =>
+  ['all','open','closed'].forEach(t =>
+    el(`tab-${t}`).classList.toggle('active', t === tab)
+  );
+
+// ── Search ────────────────────────────────────────────────
+function onSearch(val) {
+  clearTimeout(searchTimer);
+  if (!val.trim()) { isSearchMode = false; render(); return; }
+  searchTimer = setTimeout(() => doSearch(val), 400);
+}
+
+// ── Detail Modal ──────────────────────────────────────────
+function openDetail(issue) {
+  const open = getStatus(issue) === 'open';
+  const pri  = getPriority(issue);
+
+  el('dm_title').textContent = issue.title || 'Untitled';
+
+  el('dm_status').textContent = open ? 'Open' : 'Closed';
+  el('dm_status').className   = `px-2.5 py-0.5 rounded-full font-bold text-xs ${open ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700'}`;
+  el('dm_meta').textContent   = `Opened by ${getAuthor(issue)}${getDate(issue) ? ' • ' + getDate(issue) : ''}`;
+
+  el('dm_labels').innerHTML = getLabels(issue).map(l => {
+    const lc  = l.toLowerCase();
+    const cls = lc.includes('bug') ? 'lbl-bug' : lc.includes('enhanc') ? 'lbl-enhancement' : lc.includes('help') ? 'lbl-help' : 'lbl-default';
+    return `<span class="lbl ${cls}">${l}</span>`;
+  }).join('');
+
+  el('dm_body').textContent     = issue.body || issue.description || 'No description.';
+  el('dm_assignee').textContent = getAssignee(issue);
+
+  el('dm_priority').textContent = pri || '—';
+  el('dm_priority').className   = `text-sm font-bold ${{ HIGH:'text-red-600', MEDIUM:'text-yellow-600', LOW:'text-green-600' }[pri] ?? ''}`;
+
+  show('detailModal');
+}
+
+const closeDetail = () => hide('detailModal');
+
+// ── New Issue Modal ───────────────────────────────────────
+function openNewModal() {
+  ['ni_title','ni_body','ni_assignee','ni_labels'].forEach(id => el(id).value = '');
+  el('ni_priority').value = 'MEDIUM';
+  hide('ni_err');
+  show('newModal');
+}
+
+const closeNewModal = () => hide('newModal');
+
+async function submitNew() {
+  const title = el('ni_title').value.trim();
+  if (!title) { el('ni_err').textContent = 'Title is required!'; show('ni_err'); return; }
+  hide('ni_err');
+
+  const payload = {
+    title,
+    body:     el('ni_body').value.trim(),
+    priority: el('ni_priority').value,
+    assignee: el('ni_assignee').value.trim() || 'admin',
+    labels:   el('ni_labels').value.split(',').map(s => s.trim()).filter(Boolean),
+    status:   'open'
+  };
+
+  const fake = { ...payload, _id: 'local_' + Date.now(), number: ALL.length + 1, createdAt: new Date().toISOString(), author: 'admin' };
+
+  try {
+    const json  = await fetch(`${API}/issues`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) }).then(r => r.json());
+    const saved = json.issue || json.data || json || {};
+    ALL.unshift({ ...fake, ...saved });
+  } catch {
+    ALL.unshift(fake);
   }
 
-  function showLoading() {
-    document.getElementById('grid').innerHTML = `
-      <div style="grid-column:1/-1;display:flex;justify-content:center;padding:60px">
-        <span class="loading loading-spinner loading-lg" style="color:#7c3aed"></span>
-      </div>`;
-  }
-
-  function showError(msg) {
-    document.getElementById('grid').innerHTML = `
-      <div class="empty-box"><p class="text-red-400 font-semibold text-sm">${msg}</p></div>`;
-  }
-
-  // ─── TABS ────────────────────────────────────────────────
-  function switchTab(tab) {
-    currentTab = tab;
-    setTabActive(tab);
-    if (!isSearchMode) render();
-  }
-  function setTabActive(tab) {
-    ['all','open','closed'].forEach(t =>
-      document.getElementById(`tab-${t}`).classList.toggle('active', t === tab)
-    );
-  }
-
-  // ─── SEARCH ──────────────────────────────────────────────
-  function onSearch(val) {
-    clearTimeout(searchTimer);
-    if (!val.trim()) { isSearchMode = false; render(); return; }
-    searchTimer = setTimeout(() => doSearch(val), 400);
-  }
-
-  // ─── DETAIL MODAL ────────────────────────────────────────
-  function openDetail(issue) {
-    const open = getStatus(issue) === 'open';
-    const pri  = getPriority(issue);
-    const lbls = getLabels(issue);
-
-    document.getElementById('dm_title').textContent = issue.title || 'Untitled';
-
-    const stEl = document.getElementById('dm_status');
-    stEl.textContent = open ? 'Open' : 'Closed';
-    stEl.className = `px-2.5 py-0.5 rounded-full font-bold text-xs ${open ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700'}`;
-
-    const dt = getDate(issue);
-    document.getElementById('dm_meta').textContent = `Opened by ${getAuthor(issue)}${dt ? ' • ' + dt : ''}`;
-
-    document.getElementById('dm_labels').innerHTML = lbls.map(l => {
-      const lc  = l.toLowerCase();
-      const cls = lc.includes('bug') ? 'lbl-bug' : lc.includes('enhanc') ? 'lbl-enhancement' : lc.includes('help') ? 'lbl-help' : 'lbl-default';
-      return `<span class="lbl ${cls}">${l}</span>`;
-    }).join('');
-
-    document.getElementById('dm_body').textContent = issue.body || issue.description || 'No description.';
-    document.getElementById('dm_assignee').textContent = getAssignee(issue);
-
-    const priEl = document.getElementById('dm_priority');
-    priEl.textContent = pri || '—';
-    priEl.className = `text-sm font-bold ${pri === 'HIGH' ? 'text-red-600' : pri === 'MEDIUM' ? 'text-yellow-600' : 'text-green-600'}`;
-
-    document.getElementById('detailModal').classList.remove('hidden');
-  }
-
-  function closeDetail() { document.getElementById('detailModal').classList.add('hidden'); }
-
-  
-  function openNewModal() {
-    ['ni_title','ni_body','ni_assignee','ni_labels'].forEach(id => document.getElementById(id).value = '');
-    document.getElementById('ni_priority').value = 'MEDIUM';
-    document.getElementById('ni_err').classList.add('hidden');
-    document.getElementById('newModal').classList.remove('hidden');
-  }
-  function closeNewModal() { document.getElementById('newModal').classList.add('hidden'); }
-
-  async function submitNew() {
-    const title = document.getElementById('ni_title').value.trim();
-    const errEl = document.getElementById('ni_err');
-    if (!title) { errEl.textContent = 'Title is required!'; errEl.classList.remove('hidden'); return; }
-    errEl.classList.add('hidden');
-
-    const lblArr = document.getElementById('ni_labels').value.split(',').map(s => s.trim()).filter(Boolean);
-    const payload = {
-      title,
-      body: document.getElementById('ni_body').value.trim(),
-      priority: document.getElementById('ni_priority').value,
-      assignee: document.getElementById('ni_assignee').value.trim() || 'admin',
-      labels: lblArr,
-      status: 'open'
-    };
-
-    const fake = { ...payload, _id: 'local_' + Date.now(), number: ALL.length + 1, createdAt: new Date().toISOString(), author: 'admin' };
-
-    try {
-      const res  = await fetch(`${API}/issues`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-      const json = await res.json();
-      const saved = json.issue || json.data || json || {};
-      ALL.unshift({ ...fake, ...saved });
-    } catch {
-      ALL.unshift(fake);
-    }
-
-    closeNewModal();
-    render();
-  }
+  closeNewModal();
+  render();
+}
